@@ -9,6 +9,7 @@ import whois
 import concurrent.futures
 import time
 from functools import lru_cache
+import requests # Nuevo import para las funciones de Deep Dive
 
 st.set_page_config(page_title="Analizador de Correos", layout="wide")
 st.title("📬 Analizador de Correos – Proveedor y Perfil Comercial")
@@ -18,7 +19,27 @@ PERSONALES = ["gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "protonmai
 SERVICIOS = [
     {"Identificador": r'include:sendgrid\.net', "Servicio": "SendGrid", "Categoría": "Email Transaccional / Marketing"},
     {"Identificador": r'include:mailgun\.org', "Servicio": "Mailgun", "Categoría": "Email Transaccional / Marketing"},
-    # ... (otros servicios con regex)
+    {"Identificador": r'spf\.protection\.outlook\.com', "Servicio": "Microsoft 365", "Categoría": "Productividad / Colaboración"},
+    {"Identificador": r'spf\.google\.com', "Servicio": "Google Workspace", "Categoría": "Productividad / Colaboración"},
+    {"Identificador": r'servers\.mcsv\.net', "Servicio": "Mailchimp", "Categoría": "Email Marketing"},
+    {"Identificador": r'activecampaign\.com', "Servicio": "ActiveCampaign", "Categoría": "CRM / Email Marketing"},
+    {"Identificador": r'kaspcloud\.com', "Servicio": "Kaspersky Cloud", "Categoría": "Seguridad de Correo"},
+    {"Identificador": r'proofpoint\.com', "Servicio": "Proofpoint", "Categoría": "Seguridad de Correo"},
+    {"Identificador": r'mimecast\.com', "Servicio": "Mimecast", "Categoría": "Seguridad de Correo"},
+    {"Identificador": r'pphosted\.com', "Servicio": "Proofpoint", "Categoría": "Seguridad de Correo"},
+    {"Identificador": r'sureserver\.com', "Servicio": "GoDaddy", "Categoría": "Hosting / Correo"},
+    {"Identificador": r'spf\.messaging\.microsoft\.com', "Servicio": "Microsoft 365", "Categoría": "Productividad / Colaboración"},
+    {"Identificador": r'zoho\.com', "Servicio": "Zoho Mail", "Categoría": "Productividad / Colaboración"},
+    {"Identificador": r'sendinblue\.com', "Servicio": "Sendinblue", "Categoría": "Email Transaccional / Marketing"},
+    {"Identificador": r'sparkpostmail\.com', "Servicio": "SparkPost", "Categoría": "Email Transaccional"},
+    {"Identificador": r'mta-cluster\.net', "Servicio": "Amazon SES", "Categoría": "Email Transaccional"},
+    {"Identificador": r'elasticemail\.com', "Servicio": "Elastic Email", "Categoría": "Email Transaccional / Marketing"},
+    {"Identificador": r'mailjet\.com', "Servicio": "Mailjet", "Categoría": "Email Transaccional / Marketing"},
+    {"Identificador": r'mandrillapp\.com', "Servicio": "Mandrill (Mailchimp)", "Categoría": "Email Transaccional"},
+    {"Identificador": r'net-spf\.com', "Servicio": "Rackspace", "Categoría": "Hosting / Correo"},
+    {"Identificador": r'transip\.email', "Servicio": "TransIP", "Categoría": "Hosting / Correo"},
+    {"Identificador": r'ovh\.net', "Servicio": "OVHcloud", "Categoría": "Hosting / Correo"},
+    {"Identificador": r'secureserver\.net', "Servicio": "GoDaddy", "Categoría": "Hosting / Correo"}
 ]
 SERVICIOS_DICT = {svc['Identificador']: (svc['Servicio'], svc['Categoría']) for svc in SERVICIOS}
 DNS_TIMEOUT = 5
@@ -72,9 +93,18 @@ def verificar_ssl(dominio):
             with contexto.wrap_socket(sock, server_hostname=dominio) as ssock:
                 cert = ssock.getpeercert()
                 # Verificar expiración
-                not_after = dict(x[0] for x in cert['notAfter'])
-                exp_date = time.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-                if time.mktime(exp_date) < time.time():
+                # El formato de notAfter es un poco diferente en Python 3.8+ que el parseo anterior.
+                # Se puede simplificar usando ssl.get_server_certificate si solo se necesita verificar la validez,
+                # pero getpeercert da más detalles.
+                # Para el parseo, se puede hacer así:
+                from datetime import datetime
+                import dateutil.parser # Se necesitaría instalar python-dateutil
+                
+                # Obtener la fecha de expiración directamente del certificado
+                not_after_str = cert['notAfter']
+                exp_date = dateutil.parser.parse(not_after_str)
+                
+                if exp_date < datetime.now():
                     return "Certificado expirado"
                 return "Válido"
     except ssl.SSLCertVerificationError:
@@ -84,16 +114,52 @@ def verificar_ssl(dominio):
     except Exception as e:
         return f"Error: {str(e)}"
 
+# MODIFICACIÓN: Función extraer_whois mejorada para más detalles y manejo de errores
 @lru_cache(maxsize=512)
 def extraer_whois(dominio):
     try:
-        info = whois.whois(dominio, ignore_returncode=1, timeout=10)
+        info = whois.whois(dominio, ignore_returncode=1, timeout=15) # Increased timeout
+        
         creation = info.creation_date
-        if isinstance(creation, list):
-            creation = creation[0]
-        return creation.strftime("%Y-%m-%d") if creation else "N/D"
-    except Exception:
-        return "Error/Privado"
+        expiration = info.expiration_date
+        updated = info.updated_date
+
+        # Handle lists of dates
+        creation = creation[0] if isinstance(creation, list) else creation
+        expiration = expiration[0] if isinstance(expiration, list) else expiration
+        updated = updated[0] if isinstance(updated, list) else updated
+
+        # Format dates
+        creation_str = creation.strftime("%Y-%m-%d") if creation else "N/D"
+        expiration_str = expiration.strftime("%Y-%m-%d") if expiration else "N/D"
+        updated_str = updated.strftime("%Y-%m-%d") if updated else "N/D"
+        
+        return {
+            "creation_date": creation_str,
+            "expiration_date": expiration_str,
+            "updated_date": updated_str,
+            "status": "OK"
+        }
+    except whois.parser.WhoisParseError:
+        return {"creation_date": "Error", "expiration_date": "Error", "updated_date": "Error", "status": "Error de parseo"}
+    except whois.exceptions.WhoisCommandFailed:
+        return {"creation_date": "Error", "expiration_date": "Error", "updated_date": "Error", "status": "Comando WHOIS falló"}
+    except socket.timeout:
+        return {"creation_date": "Error", "expiration_date": "Error", "updated_date": "Error", "status": "Timeout WHOIS"}
+    except Exception as e:
+        # Check for common privacy related strings in WHOIS output if the info object provides it
+        # Note: 'info' might be None or not have these attributes if an exception occurred earlier.
+        # This check is more reliable if 'info' was successfully retrieved before the error.
+        # For simplicity here, we assume if we reached this block, info might be available but generic error.
+        if "rate limit" in str(e).lower():
+             return {"creation_date": "Error", "expiration_date": "Error", "updated_date": "Error", "status": "Límite de tasa WHOIS"}
+        
+        # A more robust check for privacy in case the whois object partially populated
+        whois_output_str = str(info) if 'info' in locals() and info else ""
+        if "privacy" in whois_output_str.lower() or "redacted for privacy" in whois_output_str.lower():
+             return {"creation_date": "Privado", "expiration_date": "Privado", "updated_date": "Privado", "status": "Privado/No disponible"}
+
+        return {"creation_date": "Error", "expiration_date": "Error", "updated_date": "Error", "status": f"Error inesperado: {type(e).__name__}"}
 
 @lru_cache(maxsize=1024)
 def detectar_proveedor_avanzado(dominio):
@@ -109,7 +175,11 @@ def detectar_proveedor_avanzado(dominio):
             r'outlook|protection\.outlook': "Microsoft 365",
             r'google|googlemail': "Google Workspace",
             r'zoho': "Zoho Mail",
-            r'secureserver': "GoDaddy"
+            r'secureserver': "GoDaddy",
+            r'mailgun': "Mailgun",
+            r'sendgrid': "SendGrid",
+            r'mxlogic': "McAfee Email Protection", # Antiguo pero posible
+            r'trendmicro': "Trend Micro Email Security"
         }
         
         for registro in registros:
@@ -146,12 +216,127 @@ def detectar_servicio_y_categoria(spf):
             return servicio, categoria
     return "No identificado", "No clasificado"
 
-# Procesamiento paralelo
-def procesar_dominio(dominio):
+# NUEVAS FUNCIONES DE ANÁLISIS PROFUNDO
+@lru_cache(maxsize=1024)
+def detectar_waf_cdn(dominio):
+    try:
+        # Intentar HTTPS primero
+        try:
+            response = requests.get(f"https://{dominio}", timeout=5, verify=False) # verify=False para manejar certificados auto-firmados o errores temporales
+        except requests.exceptions.SSLError:
+            # Fallback a HTTP si HTTPS falla por SSL
+            response = requests.get(f"http://{dominio}", timeout=5)
+            
+        headers = {k.lower(): v.lower() for k, v in response.headers.items()}
+        
+        # Patrones comunes de WAF/CDN en encabezados
+        if "server" in headers:
+            if "cloudflare" in headers["server"] or "cf-ray" in headers:
+                return "Cloudflare"
+            if "akamai" in headers["server"] or "x-akamai-transformed" in headers:
+                return "Akamai"
+            if "incapsula" in headers["server"] or "x-iinfo" in headers:
+                return "Imperva Incapsula"
+            if "sucuri" in headers["server"] or "x-sucuri-id" in headers:
+                return "Sucuri"
+            if "amazon" in headers["server"] or "x-amz-cf-id" in headers:
+                return "Amazon CloudFront"
+            if "azure" in headers["server"] or "x-azure-fdid" in headers:
+                return "Azure Front Door"
+            if "varnish" in headers["server"]:
+                return "Varnish Cache (CDN/Proxy)"
+            
+        # Comprobar CNAME para CDN/WAF
+        try:
+            cname_answers = dns.resolver.resolve(dominio, 'CNAME', lifetime=DNS_TIMEOUT)
+            for r in cname_answers:
+                cname_target = r.target.to_text().lower()
+                if "cloudflare.com" in cname_target: return "Cloudflare"
+                if "akamai.net" in cname_target: return "Akamai"
+                if "incapsula.net" in cname_target: return "Imperva Incapsula"
+                if "sucuri.net" in cname_target: return "Sucuri"
+                if "cloudfront.net" in cname_target: return "Amazon CloudFront"
+                if "azureedge.net" in cname_target: return "Azure CDN"
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.Timeout):
+            pass # No CNAME o problema de DNS
+
+        return "No detectado"
+    except requests.exceptions.RequestException:
+        return "Error HTTP/Conexión"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@lru_cache(maxsize=1024)
+def obtener_dns_provider(dominio):
+    try:
+        ns_answers = dns.resolver.resolve(dominio, 'NS', lifetime=DNS_TIMEOUT)
+        ns_records = [str(r.target).lower() for r in ns_answers]
+
+        known_providers = {
+            "cloudflare.com": "Cloudflare DNS",
+            "google.com": "Google Cloud DNS",
+            "awsdns": "AWS Route 53",
+            "godaddy.com": "GoDaddy DNS",
+            "dnspark.com": "DNS Park",
+            "dynect.net": "Dyn (Oracle)",
+            "easydns.com": "EasyDNS",
+            "namecheap.com": "Namecheap DNS",
+            "digitalocean.com": "DigitalOcean DNS",
+            "microsoft.com": "Azure DNS (Microsoft)",
+            "domaincontrol.com": "GoDaddy DNS", # Often used by GoDaddy
+            "hostgator.com": "HostGator DNS",
+            "bluehost.com": "Bluehost DNS",
+            "dreamhost.com": "DreamHost DNS",
+            "nsone.net": "NS1",
+            "dnsmadeeasy.com": "DNS Made Easy"
+        }
+
+        detected = []
+        for ns in ns_records:
+            for pattern, provider_name in known_providers.items():
+                if pattern in ns:
+                    detected.append(provider_name)
+        
+        if detected:
+            return ", ".join(sorted(list(set(detected))))
+        
+        return f"Otro ({ns_records[0].split('.')[-2] if ns_records else 'N/D'})"
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.Timeout):
+        return "Sin registros NS"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@lru_cache(maxsize=1024)
+def detectar_email_security_gateway_profundo(dominio):
+    # Reutilizar lógica de detectar_proveedor_avanzado, que ya cubre muchos gateways
+    mx_provider = detectar_proveedor_avanzado(dominio)
+
+    # Análisis adicional basado en includes de SPF
+    spf_record = obtener_spf(dominio)
+    if "proofpoint.net" in spf_record.lower():
+        return "Proofpoint"
+    if "mimecast.com" in spf_record.lower():
+        return "Mimecast"
+    if "pphosted.com" in spf_record.lower():
+        return "Proofpoint"
+    if "barracudanetworks.com" in spf_record.lower():
+        return "Barracuda"
+    if "cisco.com" in spf_record.lower() or "ironport.com" in spf_record.lower():
+        return "Cisco Email Security"
+    if "trendmicro.com" in spf_record.lower():
+        return "Trend Micro Email Security"
+
+    if "Otro" in mx_provider:
+        # Si el MX no dio un proveedor específico, y el SPF tampoco, se puede clasificar como "No detectado"
+        return "No detectado (o ISP/Host genérico)"
+    return mx_provider # Usar el resultado del detector avanzado de proveedor
+
+# REVISIÓN: Procesamiento paralelo para la fase de "Extracción Inicial"
+def procesar_dominio_inicial(dominio):
     spf = obtener_spf(dominio)
     dmarc = obtener_dmarc(dominio)
     ssl = verificar_ssl(dominio)
-    whois = extraer_whois(dominio)
+    whois_info = extraer_whois(dominio) # Esto devuelve un dict
     proveedor_mx = detectar_proveedor_avanzado(dominio)
     servicio, categoria = detectar_servicio_y_categoria(spf)
     
@@ -160,10 +345,26 @@ def procesar_dominio(dominio):
         "SPF": spf,
         "DMARC": dmarc,
         "SSL": ssl,
-        "WHOIS (Creación)": whois,
+        "WHOIS Creación": whois_info["creation_date"], # Nuevas columnas para WHOIS
+        "WHOIS Expiración": whois_info["expiration_date"],
+        "WHOIS Actualización": whois_info["updated_date"],
+        "WHOIS Estado": whois_info["status"],
         "Proveedor de Correo": proveedor_mx,
         "Servicio Detectado": servicio,
         "Categoría Funcional": categoria
+    }
+
+# REVISIÓN: Procesamiento paralelo para la fase de "Análisis Profundo"
+def procesar_dominio_profundo(dominio):
+    waf_cdn = detectar_waf_cdn(dominio)
+    email_sec_gateway = detectar_email_security_gateway_profundo(dominio)
+    dns_provider = obtener_dns_provider(dominio)
+    
+    return {
+        "Dominio": dominio,
+        "WAF/CDN": waf_cdn,
+        "Email Security Gateway": email_sec_gateway,
+        "DNS Provider": dns_provider,
     }
 
 # Interfaz Streamlit
@@ -189,23 +390,64 @@ if archivo:
             st.warning("No se encontraron dominios válidos para analizar")
             st.stop()
             
-        st.info(f"Analizando {len(dominios_unicos)} dominios...")
-        progreso = st.progress(0)
-        diagnostico = []
+        # PROCESO 1: Extracción Inicial y Diagnóstico Básico
+        st.info(f"Analizando {len(dominios_unicos)} dominios únicos (Extracción Inicial)...")
+        progreso_raw = st.progress(0)
+        diagnostico_raw = []
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futuros = {executor.submit(procesar_dominio, dom): dom for dom in dominios_unicos}
-            for i, futuro in enumerate(concurrent.futures.as_completed(futuros)):
-                diagnostico.append(futuro.result())
-                progreso.progress((i + 1) / len(dominios_unicos))
+            futuros_raw = {executor.submit(procesar_dominio_inicial, dom): dom for dom in dominios_unicos}
+            for i, futuro in enumerate(concurrent.futures.as_completed(futuros_raw)):
+                try:
+                    result = futuro.result()
+                    diagnostico_raw.append(result)
+                except Exception as e:
+                    domain_in_error = futuros_raw[futuro]
+                    st.warning(f"Error en escaneo inicial de '{domain_in_error}': {e}")
+                    # Asegurar que se añada un registro con errores para no perder el dominio en el DF final
+                    diagnostico_raw.append({
+                        "Dominio": domain_in_error, 
+                        "SPF": "Error", "DMARC": "Error", "SSL": "Error", 
+                        "WHOIS Creación": "Error", "WHOIS Expiración": "Error", 
+                        "WHOIS Actualización": "Error", "WHOIS Estado": "Error",
+                        "Proveedor de Correo": "Error", "Servicio Detectado": "Error", "Categoría Funcional": "Error"
+                    })
+                progreso_raw.progress((i + 1) / len(dominios_unicos))
+
+        df_diagnostico_raw = pd.DataFrame(diagnostico_raw)
         
-        df_diagnostico = pd.DataFrame(diagnostico)
+        # PROCESO 2: Mejora de Contexto y Análisis Profundo
+        st.info(f"Realizando análisis profundo para {len(dominios_unicos)} dominios (Mejora de Contexto)...")
+        progreso_deep = st.progress(0)
+        diagnostico_deep = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futuros_deep = {executor.submit(procesar_dominio_profundo, dom): dom for dom in dominios_unicos}
+            for i, futuro in enumerate(concurrent.futures.as_completed(futuros_deep)):
+                try:
+                    result_deep = futuro.result()
+                    diagnostico_deep.append(result_deep)
+                except Exception as e:
+                    domain_in_error = futuros_deep[futuro]
+                    st.warning(f"Error en análisis profundo de '{domain_in_error}': {e}")
+                    # Asegurar que se añada un registro con errores para no perder el dominio en el DF final
+                    diagnostico_deep.append({
+                        "Dominio": domain_in_error,
+                        "WAF/CDN": "Error", "Email Security Gateway": "Error", 
+                        "DNS Provider": "Error"
+                    })
+                progreso_deep.progress((i + 1) / len(dominios_unicos))
+
+        df_diagnostico_deep = pd.DataFrame(diagnostico_deep)
+
+        # Fusionar y mostrar resultados
+        df_final_merged = pd.merge(df_diagnostico_raw, df_diagnostico_deep, on="Dominio", how="left")
         
-        st.subheader("🧠 Diagnóstico Técnico")
-        st.dataframe(df_diagnostico)
+        st.subheader("📊 Resumen de Análisis Completo")
+        st.dataframe(df_final_merged)
         
-        csv_diag = df_diagnostico.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Descargar diagnóstico", csv_diag, "diagnostico_correos.csv", "text/csv")
+        csv_final = df_final_merged.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Descargar Análisis Completo", csv_final, "analisis_profundo_correos.csv", "text/csv")
         
     except Exception as e:
-        st.error(f"Error crítico: {str(e)}")
+        st.error(f"Error crítico al procesar el archivo: {str(e)}")
