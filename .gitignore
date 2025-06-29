@@ -1,0 +1,19 @@
+# Ignorar caché y archivos temporales de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python/
+env/
+venv/
+*.env
+.idea/
+.vscode/
+
+# Ignorar archivos de Streamlit
+.streamlit/
+
+# Ignorar archivos de datos sensibles o muy grandes (si los hubiera)
+*.csv # Si tus CSV de entrada no deben ir al repo
+*.xlsx
+*.db
