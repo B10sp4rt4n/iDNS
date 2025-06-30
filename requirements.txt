@@ -3,3 +3,4 @@ dnspython
 streamlit
 python-whois
 requests
+python-whois
